@@ -3,7 +3,11 @@ const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Uses Groq (free) if GROQ_API_KEY is set, otherwise OpenAI
+const openai = process.env.GROQ_API_KEY
+  ? new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: 'https://api.groq.com/openai/v1' })
+  : new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const AI_MODEL = process.env.GROQ_API_KEY ? 'llama-3.3-70b-versatile' : 'gpt-4o-mini';
 
 // ─── Generate SEO Pack ────────────────────────────────────────────────────────
 async function generateSeo({ topic, category, audience }) {
@@ -23,7 +27,7 @@ Return ONLY valid JSON (no markdown, no explanation) with this exact structure:
 }`;
 
   const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
+    model: AI_MODEL,
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.8,
     max_tokens: 1500,
@@ -43,7 +47,7 @@ Mix: broad keywords, long-tail phrases, trending terms.
 Example: ["youtube tag", "longer phrase tag", ...]`;
 
   const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
+    model: AI_MODEL,
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.7,
     max_tokens: 500,
