@@ -36,8 +36,8 @@ Category: ${category}
 Target Audience: ${audience}
 
 STRICT RULES:
-1. Title: One powerful title, 55-65 characters, no ALL CAPS, no excessive punctuation
-2. Description: 250-300 words, human-sounding, warm tone, conversational
+1. Title: One powerful title, 55-65 characters, no ALL CAPS
+2. Description: 250-300 words, human-sounding, warm tone
 3. Return ONLY a single-line JSON object
 
 Return exactly this JSON:
@@ -82,141 +82,144 @@ Return ONLY a JSON array: ["tag1","tag2",...]`;
 // ─── Generate Thumbnail ────────────────────────────────────────────────────────
 async function generateThumbnail({ topic, prompt, referenceImagePath }) {
   const enhancedPrompt = buildPrompt(topic, prompt);
-  console.log('Thumbnail prompt:', enhancedPrompt.substring(0, 120));
+  console.log('Thumbnail prompt:', enhancedPrompt.substring(0, 100));
 
-  // Try multiple Gemini Flash model names (Google keeps renaming them)
-  const flashModels = [
-    'gemini-2.0-flash-exp-image-generation',
-    'gemini-2.0-flash-preview-image-generation',
+  // ── Provider list in priority order ──────────────────────────────────────────
+  // Each entry: { name, fn }
+  const providers = [
+    {
+      name: 'gemini-2.0-flash-exp-image-generation (v1beta)',
+      fn: () => generateWithGeminiFlash(
+        enhancedPrompt, referenceImagePath,
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp-image-generation:generateContent'
+      ),
+    },
+    {
+      name: 'gemini-2.0-flash-exp-image-generation (v1)',
+      fn: () => generateWithGeminiFlash(
+        enhancedPrompt, referenceImagePath,
+        'https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash-exp-image-generation:generateContent'
+      ),
+    },
+    {
+      name: 'imagen-3.0-generate-001 (v1)',
+      fn: () => generateWithImagen(
+        enhancedPrompt,
+        'https://generativelanguage.googleapis.com/v1/models/imagen-3.0-generate-001:predict'
+      ),
+    },
+    {
+      name: 'imagen-3.0-generate-001 (v1beta)',
+      fn: () => generateWithImagen(
+        enhancedPrompt,
+        'https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:predict'
+      ),
+    },
+    {
+      name: 'imagen-3.0-generate-002 (v1)',
+      fn: () => generateWithImagen(
+        enhancedPrompt,
+        'https://generativelanguage.googleapis.com/v1/models/imagen-3.0-generate-002:predict'
+      ),
+    },
   ];
 
-  for (const model of flashModels) {
+  for (const provider of providers) {
     try {
-      console.log('Trying model: ' + model);
-      const result = await generateWithGeminiFlash(enhancedPrompt, referenceImagePath, model);
-      console.log('SUCCESS: ' + model);
+      console.log('Trying: ' + provider.name);
+      const result = await provider.fn();
+      console.log('SUCCESS: ' + provider.name);
       return { ...result, topic, prompt: enhancedPrompt };
     } catch (err) {
-      console.log('FAILED ' + model + ': ' + err.message);
+      console.log('FAILED ' + provider.name + ': ' + err.message);
     }
   }
 
-  // Fallback: Imagen 3
-  const imagenModels = ['imagen-3.0-generate-002', 'imagen-3.0-generate-001'];
-  for (const model of imagenModels) {
-    try {
-      console.log('Trying Imagen model: ' + model);
-      const result = await generateWithImagen3(enhancedPrompt, model);
-      console.log('SUCCESS: ' + model);
-      return { ...result, topic, prompt: enhancedPrompt };
-    } catch (err) {
-      console.log('FAILED ' + model + ': ' + err.message);
-    }
-  }
-
-  console.log('All Gemini providers failed');
+  console.log('All providers failed');
   return { thumbnailBase64: null, thumbnailMime: null, isPlaceholder: true, topic, prompt: enhancedPrompt };
 }
 
 function buildPrompt(topic, userPrompt) {
   const extra = userPrompt ? userPrompt + ', ' : '';
-  return extra + 'YouTube thumbnail for: "' + topic + '", eye-catching design, vibrant colors, bold text composition, dramatic lighting, professional quality, 16:9 aspect ratio';
+  return extra + 'YouTube thumbnail for: "' + topic + '", eye-catching design, vibrant colors, bold text, dramatic lighting, professional quality, 16:9 aspect ratio';
 }
 
-// ─── Gemini Flash Image Generation ────────────────────────────────────────────
-async function generateWithGeminiFlash(prompt, referenceImagePath, model) {
+// ─── Gemini Flash (generateContent → image output) ────────────────────────────
+async function generateWithGeminiFlash(prompt, referenceImagePath, baseUrl) {
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not set');
 
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + GEMINI_API_KEY;
-
+  const url = baseUrl + '?key=' + GEMINI_API_KEY;
   const parts = [];
 
   if (referenceImagePath && fs.existsSync(referenceImagePath)) {
-    const imageBuffer = fs.readFileSync(referenceImagePath);
-    const base64Image = imageBuffer.toString('base64');
-    const mimeType    = detectMimeType(referenceImagePath);
-    parts.push({ inline_data: { mime_type: mimeType, data: base64Image } });
+    const buf      = fs.readFileSync(referenceImagePath);
+    const b64      = buf.toString('base64');
+    const mime     = detectMimeType(referenceImagePath);
+    parts.push({ inline_data: { mime_type: mime, data: b64 } });
     parts.push({
-      text: 'Use this reference image as style inspiration. Now generate: ' + prompt + '. Keep the same visual style, color palette, and layout feel but adapt for this YouTube thumbnail topic.',
+      text: 'Use this reference image as style inspiration. Generate: ' + prompt +
+            '. Keep same visual style and color palette, adapted for this YouTube thumbnail.',
     });
-    console.log('Reference image loaded: ' + Math.round(imageBuffer.byteLength / 1024) + ' KB, ' + mimeType);
+    console.log('Reference image: ' + Math.round(buf.byteLength / 1024) + ' KB');
   } else {
     parts.push({ text: prompt });
   }
 
-  const requestBody = {
-    contents: [{ role: 'user', parts }],
-    generationConfig: { responseModalities: ['IMAGE', 'TEXT'] },
-  };
-
-  const response = await axios.post(url, requestBody, {
-    headers: { 'Content-Type': 'application/json' },
-    timeout: 90000,
-    validateStatus: (s) => s < 600,
-  });
+  const response = await axios.post(
+    url,
+    { contents: [{ role: 'user', parts }], generationConfig: { responseModalities: ['IMAGE', 'TEXT'] } },
+    { headers: { 'Content-Type': 'application/json' }, timeout: 90000, validateStatus: (s) => s < 600 }
+  );
 
   if (response.status !== 200) {
-    const errMsg = (response.data && response.data.error && response.data.error.message)
-      ? response.data.error.message
-      : JSON.stringify(response.data).substring(0, 300);
-    throw new Error('Gemini Flash HTTP ' + response.status + ': ' + errMsg);
+    const msg = (response.data && response.data.error) ? response.data.error.message : JSON.stringify(response.data).substring(0, 200);
+    throw new Error('HTTP ' + response.status + ': ' + msg);
   }
 
-  const candidates = response.data && response.data.candidates ? response.data.candidates : [];
-  for (const candidate of candidates) {
-    const parts2 = (candidate.content && candidate.content.parts) ? candidate.content.parts : [];
-    for (const part of parts2) {
-      const inlineData = part.inlineData || part.inline_data;
-      if (inlineData && inlineData.data) {
-        const mimeType = inlineData.mimeType || inlineData.mime_type || 'image/jpeg';
-        console.log('Got image: ' + mimeType + ', ~' + Math.round(inlineData.data.length * 0.75 / 1024) + ' KB');
-        return { thumbnailBase64: inlineData.data, thumbnailMime: mimeType };
+  const candidates = (response.data && response.data.candidates) ? response.data.candidates : [];
+  for (const c of candidates) {
+    for (const p of ((c.content && c.content.parts) ? c.content.parts : [])) {
+      const id = p.inlineData || p.inline_data;
+      if (id && id.data) {
+        const mime = id.mimeType || id.mime_type || 'image/jpeg';
+        console.log('Image received: ' + mime + ' ~' + Math.round(id.data.length * 0.75 / 1024) + ' KB');
+        return { thumbnailBase64: id.data, thumbnailMime: mime };
       }
     }
   }
 
-  console.error('No image in response:', JSON.stringify(response.data).substring(0, 500));
-  throw new Error(model + ': No image found in response');
+  console.error('No image in response:', JSON.stringify(response.data).substring(0, 400));
+  throw new Error('No image in response');
 }
 
-// ─── Imagen 3 ─────────────────────────────────────────────────────────────────
-async function generateWithImagen3(prompt, model) {
+// ─── Imagen (predict endpoint) ────────────────────────────────────────────────
+async function generateWithImagen(prompt, baseUrl) {
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
   if (!GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not set');
 
-  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':predict?key=' + GEMINI_API_KEY;
+  const url = baseUrl + '?key=' + GEMINI_API_KEY;
 
-  const requestBody = {
-    instances: [{ prompt }],
-    parameters: {
-      sampleCount: 1,
-      aspectRatio: '16:9',
-      safetySetting: 'block_only_high',
-      personGeneration: 'allow_adult',
+  const response = await axios.post(
+    url,
+    {
+      instances: [{ prompt }],
+      parameters: { sampleCount: 1, aspectRatio: '16:9', safetySetting: 'block_only_high', personGeneration: 'allow_adult' },
     },
-  };
-
-  const response = await axios.post(url, requestBody, {
-    headers: { 'Content-Type': 'application/json' },
-    timeout: 90000,
-    validateStatus: (s) => s < 600,
-  });
+    { headers: { 'Content-Type': 'application/json' }, timeout: 90000, validateStatus: (s) => s < 600 }
+  );
 
   if (response.status !== 200) {
-    const errMsg = (response.data && response.data.error && response.data.error.message)
-      ? response.data.error.message
-      : JSON.stringify(response.data).substring(0, 300);
-    throw new Error(model + ' HTTP ' + response.status + ': ' + errMsg);
+    const msg = (response.data && response.data.error) ? response.data.error.message : JSON.stringify(response.data).substring(0, 200);
+    throw new Error('HTTP ' + response.status + ': ' + msg);
   }
 
-  const predictions = response.data && response.data.predictions ? response.data.predictions : [];
-  if (!predictions.length) throw new Error(model + ': No predictions returned');
+  const preds = (response.data && response.data.predictions) ? response.data.predictions : [];
+  if (!preds.length) throw new Error('No predictions returned');
+  const imageData = preds[0] && preds[0].bytesBase64Encoded;
+  if (!imageData) throw new Error('No image bytes in prediction');
 
-  const imageData = predictions[0] && predictions[0].bytesBase64Encoded;
-  if (!imageData) throw new Error(model + ': No image bytes in response');
-
-  console.log(model + ': Got image ~' + Math.round(imageData.length * 0.75 / 1024) + ' KB');
+  console.log('Imagen image: ~' + Math.round(imageData.length * 0.75 / 1024) + ' KB');
   return { thumbnailBase64: imageData, thumbnailMime: 'image/jpeg' };
 }
 
