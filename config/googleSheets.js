@@ -106,4 +106,26 @@ function rowToUser(row) {
   };
 }
 
-module.exports = { getAllUsers, findUserByDeviceId, findUserByEmail, registerUser, incrementUsage };
+
+// ─── Update deviceId when user logs in on new device ─────────────────────────
+async function updateDeviceId(email, newDeviceId) {
+  const sheetsClient = getSheetsClient();
+  const res = await sheetsClient.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!A:K`,
+  });
+  const rows = res.data.values || [];
+  // Find row by email (column B = index 1)
+  const rowIndex = rows.findIndex((r, i) => i > 0 && r[1] && r[1].toLowerCase() === email.toLowerCase());
+  if (rowIndex === -1) throw new Error('User not found in sheet');
+
+  const sheetRow = rowIndex + 1;
+  await sheetsClient.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!C${sheetRow}`, // Column C = DeviceID
+    valueInputOption: 'RAW',
+    requestBody: { values: [[newDeviceId]] },
+  });
+}
+
+module.exports = { getAllUsers, findUserByDeviceId, findUserByEmail, registerUser, incrementUsage, updateDeviceId };
