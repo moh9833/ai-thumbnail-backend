@@ -22,7 +22,6 @@ Target Audience: ${audience}
 RULES FOR TITLE:
 - Write ONE powerful, curiosity-driven title (55-65 characters max)
 - Use numbers, power words, or emotional triggers
-- Examples of good titles: "I Tried 7 AI Tools for 30 Days - Here's What Happened", "This $10 Trick Made My Videos Go Viral"
 - NO clickbait, NO ALL CAPS words, NO excessive punctuation
 
 RULES FOR DESCRIPTION:
@@ -30,8 +29,8 @@ RULES FOR DESCRIPTION:
 - Start with a hook sentence (what the viewer will learn/get)
 - 250-350 words total
 - Include natural paragraph breaks
-- Add a "What's covered:" section with 3-4 bullet points  
-- End with a casual CTA like "Drop a comment below" or "Let me know what you think"
+- Add a "What's covered:" section with 3-4 bullet points
+- End with a casual CTA like "Drop a comment below"
 - Include placeholder: [SUBSCRIBE LINK] and [SOCIAL LINKS]
 - Sound conversational, warm, and genuine
 
@@ -39,9 +38,9 @@ Return ONLY valid JSON, no markdown:
 {
   "title": "your title here",
   "description": "your full description here",
-  "tags": ["tag1","tag2",...20 tags total, mix of short and long-tail],
+  "tags": ["tag1","tag2",...20 tags total],
   "hashtags": ["#hashtag1","#hashtag2",...10 hashtags],
-  "keywords": ["trending keyword 1","trending keyword 2","trending keyword 3","trending keyword 4","trending keyword 5"]
+  "keywords": ["keyword1","keyword2","keyword3","keyword4","keyword5"]
 }`;
 
   const response = await openai.chat.completions.create({
@@ -60,12 +59,9 @@ Return ONLY valid JSON, no markdown:
 async function generateTags({ topic }) {
   const prompt = `You are a YouTube SEO expert. Generate 25 high-performing YouTube tags for: "${topic}"
 
-Mix these types:
-- 5 broad single keywords
-- 10 medium 2-3 word phrases  
-- 10 long-tail specific phrases (4-6 words)
+Mix: 5 broad keywords, 10 medium 2-3 word phrases, 10 long-tail 4-6 word phrases.
 
-Return ONLY a JSON array, no markdown, no explanation:
+Return ONLY a JSON array, no markdown:
 ["tag1","tag2",...]`;
 
   const response = await openai.chat.completions.create({
@@ -81,106 +77,101 @@ Return ONLY a JSON array, no markdown, no explanation:
 }
 
 // ─── Generate Thumbnail ───────────────────────────────────────────────────────
-async function generateThumbnail({ topic, prompt, referenceImagePath, faceImagePath }) {
-  const enhancedPrompt = buildThumbnailPrompt(topic, prompt);
-  console.log('Generating thumbnail with prompt:', enhancedPrompt.substring(0, 100));
+// Priority order:
+// 1. Pollinations AI  — 100% free, no API key needed
+// 2. Hugging Face     — free tier, needs HF_API_TOKEN env var
+// 3. Stability AI     — needs STABILITY_API_KEY env var
+// 4. Replicate        — needs REPLICATE_API_TOKEN env var
+// 5. Placeholder      — always works as fallback
+async function generateThumbnail({ topic, prompt, referenceImagePath }) {
+  const enhancedPrompt = buildPrompt(topic, prompt);
+  console.log('Thumbnail prompt:', enhancedPrompt.substring(0, 120));
 
-  if (process.env.REPLICATE_API_TOKEN) {
-    return await generateWithReplicate(enhancedPrompt, referenceImagePath);
-  }
-  if (process.env.STABILITY_API_KEY) {
-    return await generateWithStability(enhancedPrompt);
+  // Try each provider in order
+  const providers = [
+    { name: 'Pollinations', fn: () => generateWithPollinations(enhancedPrompt, topic) },
+    { name: 'HuggingFace',  fn: () => generateWithHuggingFace(enhancedPrompt),
+      enabled: !!process.env.HF_API_TOKEN },
+    { name: 'Stability',    fn: () => generateWithStability(enhancedPrompt),
+      enabled: !!process.env.STABILITY_API_KEY },
+    { name: 'Replicate',    fn: () => generateWithReplicate(enhancedPrompt, referenceImagePath),
+      enabled: !!process.env.REPLICATE_API_TOKEN },
+  ];
+
+  for (const provider of providers) {
+    if (provider.enabled === false) continue; // skip if key not set
+    try {
+      console.log(`Trying ${provider.name}...`);
+      const result = await provider.fn();
+      console.log(`✅ ${provider.name} succeeded`);
+      return result;
+    } catch (err) {
+      console.log(`❌ ${provider.name} failed: ${err.message}`);
+    }
   }
 
-  // Fallback placeholder
+  // Final fallback — placeholder image
   return {
-    thumbnailUrl: `https://placehold.co/1280x720/6C63FF/FFFFFF?text=${encodeURIComponent(topic)}`,
+    thumbnailUrl: `https://placehold.co/1280x720/6C63FF/FFFFFF?text=${encodeURIComponent(topic.substring(0, 30))}`,
     prompt: enhancedPrompt,
     topic,
   };
 }
 
-function buildThumbnailPrompt(topic, userPrompt) {
+// ─── Build Prompt ─────────────────────────────────────────────────────────────
+function buildPrompt(topic, userPrompt) {
   const extra = userPrompt ? userPrompt + ', ' : '';
-  return `${extra}YouTube thumbnail for topic: ${topic}, eye-catching design, vibrant colors, bold composition, dramatic lighting, professional quality, 16:9 aspect ratio, high resolution`;
+  return `${extra}YouTube thumbnail for: ${topic}, eye-catching, vibrant colors, bold text overlay space, dramatic lighting, professional quality, 16:9 aspect ratio`;
 }
 
-// ─── Replicate (SDXL) ─────────────────────────────────────────────────────────
-async function generateWithReplicate(prompt, imagePath) {
-  const headers = {
-    'Authorization': `Token ${process.env.REPLICATE_API_TOKEN}`,
-    'Content-Type': 'application/json',
-  };
+// ─── 1. Pollinations AI (FREE — No API key needed) ───────────────────────────
+async function generateWithPollinations(prompt, topic) {
+  // Pollinations returns a direct image URL — no polling needed!
+  const seed = Math.floor(Math.random() * 999999);
+  const encodedPrompt = encodeURIComponent(prompt);
 
-  // Build input — use img2img if reference image available
-  const input = {
-    prompt,
-    negative_prompt: 'blurry, low quality, distorted, watermark, text, ugly',
-    width: 1280,
-    height: 720,
-    num_inference_steps: 25,
-    guidance_scale: 7,
-    num_outputs: 1,
-  };
+  const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1280&height=720&seed=${seed}&nologo=true&enhance=true`;
 
-  // If reference image exists, convert to base64 correctly
-  if (imagePath && fs.existsSync(imagePath)) {
-    try {
-      const imageBuffer = fs.readFileSync(imagePath);
-      const base64 = imageBuffer.toString('base64');
-      const ext = path.extname(imagePath).toLowerCase().replace('.', '') || 'jpeg';
-      const mimeType = ext === 'jpg' ? 'jpeg' : ext;
-      input.image = `data:image/${mimeType};base64,${base64}`;
-      input.prompt_strength = 0.75;
-      console.log(`Reference image loaded: ${imageBuffer.length} bytes`);
-    } catch (e) {
-      console.log('Could not load reference image, generating from text only:', e.message);
-    }
-  }
+  // Verify the image actually loads (HEAD request)
+  const checkRes = await axios.head(imageUrl, { timeout: 30000 });
+  if (checkRes.status !== 200) throw new Error('Pollinations image not available');
 
-  // Use SDXL model
-  const startRes = await axios.post(
-    'https://api.replicate.com/v1/predictions',
+  return { thumbnailUrl: imageUrl, prompt, topic };
+}
+
+// ─── 2. Hugging Face Inference API (Free tier) ────────────────────────────────
+async function generateWithHuggingFace(prompt) {
+  const model = 'stabilityai/stable-diffusion-xl-base-1.0';
+  const response = await axios.post(
+    `https://api-inference.huggingface.co/models/${model}`,
     {
-      version: 'da77bc59ee60423279fd632efb4795ab731d9e3ca9705ef3341091fb989b7eaf',
-      input,
+      inputs: prompt,
+      parameters: { width: 1280, height: 720 }
     },
-    { headers }
+    {
+      headers: {
+        'Authorization': `Bearer ${process.env.HF_API_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      responseType: 'arraybuffer',
+      timeout: 60000,
+    }
   );
 
-  const predictionId = startRes.data.id;
-  if (!predictionId) throw new Error('Replicate did not return a prediction ID');
-
-  console.log('Replicate prediction started:', predictionId);
-
-  // Poll for result (max 60 seconds)
-  for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 2000));
-    const pollRes = await axios.get(
-      `https://api.replicate.com/v1/predictions/${predictionId}`,
-      { headers }
-    );
-
-    const { status, output, error } = pollRes.data;
-    console.log(`Poll ${i + 1}: status = ${status}`);
-
-    if (status === 'succeeded' && output && output[0]) {
-      return { thumbnailUrl: output[0], prompt };
-    }
-    if (status === 'failed') {
-      throw new Error(`Replicate generation failed: ${error || 'unknown error'}`);
-    }
-  }
-
-  throw new Error('Thumbnail generation timed out. Please try again.');
+  // Convert image buffer to base64 data URL
+  const base64 = Buffer.from(response.data).toString('base64');
+  return {
+    thumbnailUrl: `data:image/jpeg;base64,${base64}`,
+    prompt,
+  };
 }
 
-// ─── Stability AI ─────────────────────────────────────────────────────────────
+// ─── 3. Stability AI ─────────────────────────────────────────────────────────
 async function generateWithStability(prompt) {
   const FormData = require('form-data');
   const formData = new FormData();
   formData.append('prompt', prompt);
-  formData.append('output_format', 'webp');
+  formData.append('output_format', 'jpeg');
   formData.append('width', '1280');
   formData.append('height', '720');
 
@@ -192,14 +183,57 @@ async function generateWithStability(prompt) {
         ...formData.getHeaders(),
         Authorization: `Bearer ${process.env.STABILITY_API_KEY}`,
         Accept: 'application/json',
-      }
+      },
+      timeout: 60000,
     }
   );
 
   return {
-    thumbnailUrl: `data:image/webp;base64,${res.data.image}`,
+    thumbnailUrl: `data:image/jpeg;base64,${res.data.image}`,
     prompt,
   };
+}
+
+// ─── 4. Replicate (SDXL) — kept as last resort ────────────────────────────────
+async function generateWithReplicate(prompt, imagePath) {
+  const headers = {
+    'Authorization': `Token ${process.env.REPLICATE_API_TOKEN}`,
+    'Content-Type': 'application/json',
+  };
+
+  const input = {
+    prompt,
+    negative_prompt: 'blurry, low quality, distorted, watermark',
+    width: 1280,
+    height: 720,
+    num_inference_steps: 25,
+    guidance_scale: 7,
+  };
+
+  if (imagePath && fs.existsSync(imagePath)) {
+    const imageBuffer = fs.readFileSync(imagePath);
+    const base64 = imageBuffer.toString('base64');
+    input.image = `data:image/jpeg;base64,${base64}`;
+    input.prompt_strength = 0.75;
+  }
+
+  const startRes = await axios.post(
+    'https://api.replicate.com/v1/predictions',
+    { version: 'da77bc59ee60423279fd632efb4795ab731d9e3ca9705ef3341091fb989b7eaf', input },
+    { headers }
+  );
+
+  const predictionId = startRes.data.id;
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    const poll = await axios.get(
+      `https://api.replicate.com/v1/predictions/${predictionId}`, { headers });
+    if (poll.data.status === 'succeeded' && poll.data.output?.[0]) {
+      return { thumbnailUrl: poll.data.output[0], prompt };
+    }
+    if (poll.data.status === 'failed') throw new Error('Replicate failed');
+  }
+  throw new Error('Replicate timed out');
 }
 
 module.exports = { generateSeo, generateTags, generateThumbnail };
